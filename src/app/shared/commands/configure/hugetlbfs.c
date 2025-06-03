@@ -157,6 +157,8 @@ init( config_t const * config ) {
     min_size[ 1 ] += PAGE_SIZE[ 1 ] * fd_topo_gigantic_page_cnt( &config->topo, i );
   }
 
+  min_size[0] = 67108864;
+
   for( ulong i=0UL; i<2UL; i++ ) {
     FD_LOG_NOTICE(( "RUN: `mkdir -p %s`", mount_path[ i ] ));
     if( FD_UNLIKELY( -1==fd_file_util_mkdir_all( mount_path[ i ], config->uid, config->gid ) ) ) {
@@ -299,6 +301,8 @@ check( config_t const * config ) {
     required_min_size[ 0 ] += PAGE_SIZE[ 0 ] * fd_topo_huge_page_cnt( &config->topo, i, 0 );
     required_min_size[ 1 ] += PAGE_SIZE[ 1 ] * fd_topo_gigantic_page_cnt( &config->topo, i );
   }
+
+  required_min_size[0] = 67108864;
 
   struct stat st;
   int result1 = stat( mount_path[ 0 ], &st );
