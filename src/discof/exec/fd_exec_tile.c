@@ -3,7 +3,7 @@
 #include "../../disco/tiles.h"
 #include "generated/fd_exec_tile_seccomp.h"
 
-#include "../../disco/topo/fd_pod_format.h"
+#include "../../util/pod/fd_pod_format.h"
 
 #include "../../flamenco/runtime/fd_runtime.h"
 #include "../../flamenco/runtime/fd_runtime_public.h"
@@ -248,11 +248,6 @@ prepare_new_slot_execution( fd_exec_tile_ctx_t *           ctx,
   ctx->txn_ctx->prev_lamports_per_signature = slot_msg->prev_lamports_per_signature;
   ctx->txn_ctx->fee_rate_governor           = slot_msg->fee_rate_governor;
   ctx->txn_ctx->enable_exec_recording       = slot_msg->enable_exec_recording;
-
-  ctx->txn_ctx->sysvar_cache = fd_wksp_laddr_fast( ctx->runtime_public_wksp, slot_msg->sysvar_cache_gaddr );
-  if( FD_UNLIKELY( !ctx->txn_ctx->sysvar_cache ) ) {
-    FD_LOG_ERR(( "Could not find valid sysvar cache" ));
-  }
 
   uchar * block_hash_queue_enc = fd_wksp_laddr_fast( ctx->runtime_public_wksp, slot_msg->block_hash_queue_encoded_gaddr );
   if( FD_UNLIKELY( !block_hash_queue_enc ) ) {

@@ -2,11 +2,13 @@
 
 /* Common helper method for populating each epoch's vote cache. */
 static void
-fd_runtime_fuzz_block_update_votes_cache( fd_vote_accounts_pair_t_mapnode_t *  pool,
+fd_runtime_fuzz_block_update_votes_cache( fd_exec_slot_ctx_t *                 slot_ctx,
+                                          fd_vote_accounts_pair_t_mapnode_t *  pool,
                                           fd_vote_accounts_pair_t_mapnode_t ** root,
                                           fd_exec_test_vote_account_t *        vote_accounts,
                                           pb_size_t                            vote_accounts_cnt,
-                                          fd_spad_t *                          spad ) {
+                                          fd_spad_t *                          spad,
+                                          uchar                                update_vote_timestamp ) {
   for( uint i=0U; i<vote_accounts_cnt; i++ ) {
     fd_exec_test_acct_state_t * vote_account = &vote_accounts[i].vote_account;
     ulong                       stake        = vote_accounts[i].stake;
@@ -23,6 +25,44 @@ fd_runtime_fuzz_block_update_votes_cache( fd_vote_accounts_pair_t_mapnode_t *  p
     fd_memcpy( &vote_node->elem.value.owner, vote_account->owner, sizeof(fd_pubkey_t) );
 
     fd_vote_accounts_pair_t_map_insert( pool, root, vote_node );
+
+    /* Update the clock vote timestamps map for stakes at epoch T */
+    if( update_vote_timestamp ) {
+      FD_TXN_ACCOUNT_DECL( acc );
+      if( fd_txn_account_init_from_funk_readonly( acc, &vote_node->elem.key, slot_ctx->funk, slot_ctx->funk_txn ) ) {
+        return;
+      }
+
+      FD_SPAD_FRAME_BEGIN( spad ) {
+        /* First need to deserialize the vote state from the account record */
+        int err;
+        fd_vote_state_versioned_t * vsv = fd_bincode_decode_spad(
+          vote_state_versioned, spad,
+          acc->vt->get_data( acc ),
+          acc->vt->get_data_len( acc ),
+          &err );
+        if( FD_UNLIKELY( err ) ) {
+          return;
+        }
+
+        fd_vote_block_timestamp_t const * ts = NULL;
+        switch( vsv->discriminant ) {
+        case fd_vote_state_versioned_enum_v0_23_5:
+          ts = &vsv->inner.v0_23_5.last_timestamp;
+          break;
+        case fd_vote_state_versioned_enum_v1_14_11:
+          ts = &vsv->inner.v1_14_11.last_timestamp;
+          break;
+        case fd_vote_state_versioned_enum_current:
+          ts = &vsv->inner.current.last_timestamp;
+          break;
+        default:
+          __builtin_unreachable();
+        }
+
+        fd_vote_record_timestamp_vote_with_slot( slot_ctx, &vote_node->elem.key, ts->timestamp, ts->slot );
+      } FD_SPAD_FRAME_END;
+    }
   }
 }
 
@@ -83,6 +123,11 @@ fd_runtime_fuzz_block_ctx_create( fd_runtime_fuzz_runner_t *           runner,
   ulong            slot      = test_ctx->slot_ctx.slot;
   fd_slot_bank_t * slot_bank = &slot_ctx->slot_bank;
 
+  /* Initialize vote timestamps cache */
+  uchar * pool_mem                      = fd_spad_alloc( runner->spad, fd_clock_timestamp_vote_t_map_align(), fd_clock_timestamp_vote_t_map_footprint( 10000UL ) );
+  slot_bank->timestamp_votes.votes_pool = fd_clock_timestamp_vote_t_map_join( fd_clock_timestamp_vote_t_map_new( pool_mem, 10000UL ) );
+  slot_bank->timestamp_votes.votes_root = NULL;
+
   fd_memcpy( slot_bank->lthash.lthash, test_ctx->slot_ctx.parent_lt_hash, FD_LTHASH_LEN_BYTES );
   slot_bank->slot                   = slot;
   slot_bank->block_height           = test_ctx->slot_ctx.block_height;
@@ -104,7 +149,7 @@ fd_runtime_fuzz_block_ctx_create( fd_runtime_fuzz_runner_t *           runner,
   // self.max_tick_height = (self.slot + 1) * self.ticks_per_slot;
   epoch_bank->hashes_per_tick       = test_ctx->epoch_ctx.hashes_per_tick;
   epoch_bank->ticks_per_slot        = test_ctx->epoch_ctx.ticks_per_slot;
-  epoch_bank->ns_per_slot           = (uint128)64000000; // TODO: restore from input or smth
+  epoch_bank->ns_per_slot           = (uint128)400000000; // TODO: restore from input or smth
   epoch_bank->genesis_creation_time = test_ctx->epoch_ctx.genesis_creation_time;
   epoch_bank->slots_per_year        = test_ctx->epoch_ctx.slots_per_year;
   epoch_bank->inflation             = (fd_inflation_t) {
@@ -121,15 +166,12 @@ fd_runtime_fuzz_block_ctx_create( fd_runtime_fuzz_runner_t *           runner,
     fd_runtime_fuzz_load_account( acc, funk, funk_txn, &test_ctx->acct_states[i], 1 );
   }
 
-  /* Restore sysvar cache */
-  fd_runtime_sysvar_cache_load( slot_ctx, runner->spad );
-
   /* Finish init epoch bank sysvars */
-  uchar * val_epoch_schedule = fd_wksp_laddr_fast( runner->wksp, slot_ctx->sysvar_cache->gaddr_epoch_schedule );
-  fd_memcpy( &epoch_bank->epoch_schedule, val_epoch_schedule, sizeof(fd_epoch_schedule_t) );
-  fd_memcpy( &epoch_bank->rent_epoch_schedule, val_epoch_schedule, sizeof(fd_epoch_schedule_t) );
-  uchar * val_rent = fd_wksp_laddr_fast( runner->wksp, slot_ctx->sysvar_cache->gaddr_rent );
-  fd_memcpy( &epoch_bank->rent, val_rent, sizeof(fd_rent_t) );
+  fd_epoch_schedule_t * epoch_schedule = fd_sysvar_epoch_schedule_read( funk, funk_txn, runner->spad );
+  fd_memcpy( &epoch_bank->epoch_schedule, epoch_schedule, sizeof(fd_epoch_schedule_t) );
+  fd_memcpy( &epoch_bank->rent_epoch_schedule, epoch_schedule, sizeof(fd_epoch_schedule_t) );
+  fd_rent_t const * rent = fd_sysvar_rent_read( funk, funk_txn, runner->spad );
+  fd_memcpy( &epoch_bank->rent, rent, sizeof(fd_rent_t) );
   epoch_bank->stakes.epoch = fd_slot_to_epoch( &epoch_bank->epoch_schedule, slot_bank->prev_slot, NULL );
 
   /* Update stake cache for epoch T */
@@ -159,30 +201,36 @@ fd_runtime_fuzz_block_ctx_create( fd_runtime_fuzz_runner_t *           runner,
   }
 
   /* Update vote cache for epoch T */
-  fd_runtime_fuzz_block_update_votes_cache( epoch_bank->stakes.vote_accounts.vote_accounts_pool,
+  fd_runtime_fuzz_block_update_votes_cache( slot_ctx,
+                                            epoch_bank->stakes.vote_accounts.vote_accounts_pool,
                                             &epoch_bank->stakes.vote_accounts.vote_accounts_root,
                                             test_ctx->epoch_ctx.vote_accounts_t,
                                             test_ctx->epoch_ctx.vote_accounts_t_count,
-                                            runner->spad );
+                                            runner->spad,
+                                            1 );
 
   /* Update vote cache for epoch T-1 */
-  fd_runtime_fuzz_block_update_votes_cache( epoch_bank->next_epoch_stakes.vote_accounts_pool,
+  fd_runtime_fuzz_block_update_votes_cache( slot_ctx,
+                                            epoch_bank->next_epoch_stakes.vote_accounts_pool,
                                             &epoch_bank->next_epoch_stakes.vote_accounts_root,
                                             test_ctx->epoch_ctx.vote_accounts_t_1,
                                             test_ctx->epoch_ctx.vote_accounts_t_1_count,
-                                            runner->spad );
+                                            runner->spad,
+                                            0 );
 
   /* Update vote cache for epoch T-2 */
-  uchar * pool_mem                           = fd_spad_alloc( runner->spad,
+  pool_mem                                   = fd_spad_alloc( runner->spad,
                                                               fd_vote_accounts_pair_t_map_align(),
                                                               fd_vote_accounts_pair_t_map_footprint( vote_acct_max ) );
   slot_bank->epoch_stakes.vote_accounts_pool = fd_vote_accounts_pair_t_map_join( fd_vote_accounts_pair_t_map_new( pool_mem, vote_acct_max ) );
   slot_bank->epoch_stakes.vote_accounts_root = NULL;
-  fd_runtime_fuzz_block_update_votes_cache( slot_bank->epoch_stakes.vote_accounts_pool,
+  fd_runtime_fuzz_block_update_votes_cache( slot_ctx,
+                                            slot_bank->epoch_stakes.vote_accounts_pool,
                                             &slot_bank->epoch_stakes.vote_accounts_root,
                                             test_ctx->epoch_ctx.vote_accounts_t_2,
                                             test_ctx->epoch_ctx.vote_accounts_t_2_count,
-                                            runner->spad );
+                                            runner->spad,
+                                            0 );
 
   /* Initialize the current running epoch stake and vote accounts */
   pool_mem                                        = fd_spad_alloc( runner->spad,
@@ -233,11 +281,6 @@ fd_runtime_fuzz_block_ctx_create( fd_runtime_fuzz_runner_t *           runner,
   slot_bank->block_hash_queue.ages_pool = fd_hash_hash_age_pair_t_map_join( fd_hash_hash_age_pair_t_map_new( pool_mem, FD_BLOCKHASH_QUEUE_MAX_ENTRIES+1UL ) );
   slot_bank->block_hash_queue.last_hash = fd_valloc_malloc( fd_spad_virtual( runner->spad ), FD_HASH_ALIGN, FD_HASH_FOOTPRINT );
 
-  /* TODO: Restore this from input */
-  pool_mem                              = fd_spad_alloc( runner->spad, fd_clock_timestamp_vote_t_map_align(), fd_clock_timestamp_vote_t_map_footprint( 10000UL ) );
-  slot_bank->timestamp_votes.votes_pool = fd_clock_timestamp_vote_t_map_join( fd_clock_timestamp_vote_t_map_new( pool_mem, 10000UL ) );
-  slot_bank->timestamp_votes.votes_root = NULL;
-
   /* TODO: We might need to load this in from the input. We also need to size this out for worst case, but this also blows up the memory requirement. */
   /* Allocate all the memory for the rent fresh accounts list */
   fd_rent_fresh_accounts_new( &slot_bank->rent_fresh_accounts );
@@ -254,7 +297,7 @@ fd_runtime_fuzz_block_ctx_create( fd_runtime_fuzz_runner_t *           runner,
   fd_memset( slot_bank->block_hash_queue.last_hash, 0, sizeof(fd_hash_t) );
 
   // Use the latest lamports per signature
-  fd_recent_block_hashes_global_t const * rbh_global = fd_sysvar_cache_recent_block_hashes( slot_ctx->sysvar_cache, runner->wksp );
+  fd_recent_block_hashes_global_t const * rbh_global = fd_sysvar_recent_hashes_read( funk, funk_txn, runner->spad );
   fd_recent_block_hashes_t rbh[1];
   if( rbh_global ) {
     rbh->hashes = deq_fd_block_block_hash_entry_t_join( (uchar*)rbh_global + rbh_global->hashes_offset );
@@ -424,7 +467,7 @@ fd_runtime_fuzz_block_run( fd_runtime_fuzz_runner_t * runner,
     fd_wksp_t *           wksp          = fd_wksp_attach( "wksp" );
     fd_alloc_t *          alloc         = fd_alloc_join( fd_alloc_new( fd_wksp_alloc_laddr( wksp, fd_alloc_align(), fd_alloc_footprint(), 2 ), 2 ), 0 );
     uchar *               slot_ctx_mem  = fd_spad_alloc( runner->spad, FD_EXEC_SLOT_CTX_ALIGN,  FD_EXEC_SLOT_CTX_FOOTPRINT );
-    fd_exec_slot_ctx_t *  slot_ctx      = fd_exec_slot_ctx_join ( fd_exec_slot_ctx_new ( slot_ctx_mem, runner->spad ) );
+    fd_exec_slot_ctx_t *  slot_ctx      = fd_exec_slot_ctx_join ( fd_exec_slot_ctx_new ( slot_ctx_mem ) );
 
     /* Set up the block execution context */
     fd_runtime_block_info_t * block_info = fd_runtime_fuzz_block_ctx_create( runner, slot_ctx, input );

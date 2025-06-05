@@ -12,7 +12,7 @@ void
 help_cmd_fn( args_t *   args   FD_PARAM_UNUSED,
              config_t * config FD_PARAM_UNUSED ) {
   FD_LOG_STDOUT(( "%s control binary\n\n", FD_APP_NAME ));
-  FD_LOG_STDOUT(( "Usage: %s [OPTIONS] <SUBCOMMAND>\n\n", FD_BINARY_NAME ));
+  FD_LOG_STDOUT(( "Usage: %s <SUBCOMMAND> [OPTIONS]\n\n", FD_BINARY_NAME ));
   FD_LOG_STDOUT(( "\nOPTIONS:\n" ));
   /* fdctl does not have many flag arguments so we hard-code the
      --config parameter. */
@@ -21,7 +21,7 @@ help_cmd_fn( args_t *   args   FD_PARAM_UNUSED,
   FD_LOG_STDOUT(( "        --help             Print this help message\n\n" ));
   FD_LOG_STDOUT(( "SUBCOMMANDS:\n" ));
   for( ulong i=0UL; ACTIONS[ i ]; i++ ) {
-    FD_LOG_STDOUT(( "    %12s    %s\n", ACTIONS[ i ]->name, ACTIONS[ i ]->description ));
+    FD_LOG_STDOUT(( "   %13s    %s\n", ACTIONS[ i ]->name, ACTIONS[ i ]->description ));
   }
 }
 

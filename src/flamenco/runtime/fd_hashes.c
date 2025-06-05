@@ -328,11 +328,9 @@ fd_account_hash( fd_funk_t *                    funk,
         iterator.  Instead, we will store away the record and erase
         it later where appropriate.  */
     task_info->should_erase = 1;
-    /* In the exceedingly unlikely event that the account's old hash is
-       actually 0, this would cause the account not to be included in
-       the bank hash. */
-    if( memcmp( task_info->acc_hash->hash, acc_meta->hash, sizeof(fd_hash_t) ) != 0 ) {
-      task_info->hash_changed = 1;
+    if( FD_UNLIKELY( NULL != acc_meta_parent) ){
+      if( FD_UNLIKELY( acc_meta->info.lamports != acc_meta_parent->info.lamports ) )
+        task_info->hash_changed = 1;
     }
   } else {
     uchar *             acc_data = fd_account_meta_get_data((fd_account_meta_t *) acc_meta);
@@ -855,7 +853,9 @@ fd_accounts_sorted_subrange_gather( fd_funk_t *             funk,
 
   *num_pairs_out = num_pairs;
 
-  fd_lthash_add( lthash_value_out, &accum  );
+  if (lthash_value_out) {
+    fd_lthash_add( lthash_value_out, &accum  );
+  }
 }
 
 static void
@@ -1300,7 +1300,6 @@ fd_accounts_check_lthash( fd_funk_t *      funk,
 
   // walk up the transactions...
   for (ulong idx = 0; idx < txn_cnt; idx++) {
-    FD_LOG_WARNING(("txn idx %lu", idx));
     for (fd_funk_rec_t const *rec = fd_funk_txn_first_rec( funk, txns[idx]);
          NULL != rec;
          rec = fd_funk_txn_next_rec(funk, rec)) {

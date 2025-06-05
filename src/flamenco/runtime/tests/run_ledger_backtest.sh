@@ -15,7 +15,6 @@ LEDGER=""
 SNAPSHOT=""
 RESTORE_ARCHIVE=""
 END_SLOT="1010"
-PAGES="30"
 FUNK_PAGES="16"
 INDEX_MAX="5000000"
 TRASH_HASH=""
@@ -55,11 +54,6 @@ while [[ $# -gt 0 ]]; do
        ;;
     -e|--end_slot)
        END_SLOT="$2"
-       shift
-       shift
-       ;;
-    -p|--pages)
-       PAGES="$2"
        shift
        shift
        ;;
@@ -200,9 +194,10 @@ sudo rm -rf $DUMP/$LEDGER/backtest.blockstore $DUMP/$LEDGER/backtest.funk &> /de
 set -x
   sudo $OBJDIR/bin/firedancer-dev backtest --config ${DUMP_DIR}/${LEDGER}_backtest.toml &> /dev/null
 
+{ set +x; } &> /dev/null
+
 sudo rm -rf $DUMP/$LEDGER/backtest.blockstore $DUMP/$LEDGER/backtest.funk &> /dev/null
 
-{ set +x; } &> /dev/null
 echo_notice "Finished on-demand ingest and replay\n"
 
 echo "Log for ledger $LEDGER at $LOG"

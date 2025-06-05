@@ -1,12 +1,13 @@
 #include "fd_rewards.h"
 #include <math.h>
 
+#include "../../ballet/siphash13/fd_siphash13.h"
 #include "../runtime/fd_executor_err.h"
 #include "../runtime/fd_system_ids.h"
 #include "../runtime/fd_runtime.h"
 #include "../runtime/context/fd_exec_slot_ctx.h"
-#include "../../ballet/siphash13/fd_siphash13.h"
 #include "../runtime/program/fd_program_util.h"
+#include "../runtime/sysvar/fd_sysvar_stake_history.h"
 
 /* https://github.com/anza-xyz/agave/blob/cbc8320d35358da14d79ebcada4dfb6756ffac79/sdk/program/src/native_token.rs#L6 */
 #define LAMPORTS_PER_SOL                     (1000000000UL)
@@ -376,7 +377,8 @@ calculate_reward_points_partitioned( fd_exec_slot_ctx_t *       slot_ctx,
                                      ulong                      rewards,
                                      fd_point_value_t *         result,
                                      fd_tpool_t *               tpool,
-                                     fd_epoch_info_t *          temp_info ) {
+                                     fd_epoch_info_t *          temp_info,
+                                     fd_spad_t *                runtime_spad ) {
 
   uint128 points = 0;
   ulong minimum_stake_delegation = get_minimum_stake_delegation( slot_ctx );
@@ -386,9 +388,10 @@ calculate_reward_points_partitioned( fd_exec_slot_ctx_t *       slot_ctx,
   ulong   new_warmup_cooldown_rate_epoch_val = 0UL;
   ulong * new_warmup_cooldown_rate_epoch     = &new_warmup_cooldown_rate_epoch_val;
   int is_some = fd_new_warmup_cooldown_rate_epoch( slot_ctx->slot_bank.slot,
-                                                   slot_ctx->sysvar_cache,
+                                                   slot_ctx->funk,
+                                                   slot_ctx->funk_txn,
+                                                   runtime_spad,
                                                    &slot_ctx->epoch_ctx->features,
-                                                   slot_ctx->runtime_wksp,
                                                    new_warmup_cooldown_rate_epoch,
                                                    _err );
   if( FD_UNLIKELY( !is_some ) ) {
@@ -603,9 +606,10 @@ calculate_stake_vote_rewards( fd_exec_slot_ctx_t *                       slot_ct
   ulong   new_warmup_cooldown_rate_epoch_val = 0UL;
   ulong * new_warmup_cooldown_rate_epoch     = &new_warmup_cooldown_rate_epoch_val;
   int is_some = fd_new_warmup_cooldown_rate_epoch( slot_ctx->slot_bank.slot,
-                                                   slot_ctx->sysvar_cache,
+                                                   slot_ctx->funk,
+                                                   slot_ctx->funk_txn,
+                                                   runtime_spad,
                                                    &slot_ctx->epoch_ctx->features,
-                                                   slot_ctx->runtime_wksp,
                                                    new_warmup_cooldown_rate_epoch,
                                                    _err );
   if( FD_UNLIKELY( !is_some ) ) {
@@ -696,10 +700,9 @@ calculate_validator_rewards( fd_exec_slot_ctx_t *                      slot_ctx,
                              ulong                                     exec_spad_cnt,
                              fd_spad_t *                               runtime_spad ) {
     /* https://github.com/firedancer-io/solana/blob/dab3da8e7b667d7527565bddbdbecf7ec1fb868e/runtime/src/bank.rs#L2759-L2786 */
-
-  fd_stake_history_t const * stake_history = fd_sysvar_cache_stake_history( slot_ctx->sysvar_cache, slot_ctx->runtime_wksp );
-  if( FD_UNLIKELY( !stake_history ) ) {
-    FD_LOG_ERR(( "StakeHistory sysvar is missing from sysvar cache" ));
+  fd_stake_history_t const * stake_history = fd_sysvar_stake_history_read( slot_ctx->funk, slot_ctx->funk_txn, runtime_spad );
+    if( FD_UNLIKELY( !stake_history ) ) {
+    FD_LOG_ERR(( "Unable to read and decode stake history sysvar" ));
   }
 
   /* Calculate the epoch reward points from stake/vote accounts */
@@ -708,7 +711,8 @@ calculate_validator_rewards( fd_exec_slot_ctx_t *                      slot_ctx,
                                        rewards,
                                        &result->point_value,
                                        tpool,
-                                       temp_info );
+                                       temp_info,
+                                       runtime_spad );
 
   /* Calculate the stake and vote rewards for each account */
   calculate_stake_vote_rewards( slot_ctx,
@@ -745,18 +749,15 @@ get_reward_distribution_num_blocks( fd_epoch_schedule_t const * epoch_schedule,
 }
 
 static void
-hash_rewards_into_partitions( fd_exec_slot_ctx_t *                        slot_ctx,
-                              fd_stake_reward_calculation_t *             stake_reward_calculation,
+hash_rewards_into_partitions( fd_stake_reward_calculation_t *             stake_reward_calculation,
                               fd_hash_t const *                           parent_blockhash,
+                              ulong                                       num_partitions,
                               fd_stake_reward_calculation_partitioned_t * result,
                               fd_spad_t *                                 runtime_spad ) {
 
   /* Initialize a dlist for every partition.
       These will all use the same pool - we do not re-allocate the stake rewards, only move them into partitions. */
   result->partitioned_stake_rewards.pool = stake_reward_calculation->pool;
-  ulong num_partitions = get_reward_distribution_num_blocks( &fd_exec_epoch_ctx_epoch_bank( slot_ctx->epoch_ctx )->epoch_schedule,
-                                                              slot_ctx->slot_bank.slot,
-                                                              stake_reward_calculation->stake_rewards_len );
   result->partitioned_stake_rewards.partitions_len = num_partitions;
   result->partitioned_stake_rewards.partitions     = fd_spad_alloc( runtime_spad,
                                                                     fd_partitioned_stake_rewards_dlist_align(),
@@ -833,9 +834,13 @@ calculate_rewards_for_partitioning( fd_exec_slot_ctx_t *                   slot_
                                exec_spad_cnt,
                                runtime_spad );
 
-  hash_rewards_into_partitions( slot_ctx,
-                                &validator_result->calculate_stake_vote_rewards_result.stake_reward_calculation,
+  fd_stake_reward_calculation_t * stake_reward_calculation = &validator_result->calculate_stake_vote_rewards_result.stake_reward_calculation;
+  ulong num_partitions = get_reward_distribution_num_blocks( &fd_exec_epoch_ctx_epoch_bank( slot_ctx->epoch_ctx )->epoch_schedule,
+                                                              slot_ctx->slot_bank.slot,
+                                                              stake_reward_calculation->stake_rewards_len );
+  hash_rewards_into_partitions( stake_reward_calculation,
                                 parent_blockhash,
+                                num_partitions,
                                 &result->stake_rewards_by_partition,
                                 runtime_spad );
 
@@ -931,7 +936,6 @@ distribute_epoch_reward_to_stake_acc( fd_exec_slot_ctx_t * slot_ctx,
                                       fd_pubkey_t *        stake_pubkey,
                                       ulong                reward_lamports,
                                       ulong                new_credits_observed ) {
-
   FD_TXN_ACCOUNT_DECL( stake_acc_rec );
   if( FD_UNLIKELY( fd_txn_account_init_from_funk_mutable( stake_acc_rec,
                                                           stake_pubkey,
@@ -1170,16 +1174,16 @@ fd_begin_partitioned_rewards( fd_exec_slot_ctx_t * slot_ctx,
     Re-calculates partitioned stake rewards.
     This updates the slot context's epoch reward status with the recalculated partitioned rewards.
 
-    https://github.com/anza-xyz/agave/blob/2316fea4c0852e59c071f72d72db020017ffd7d0/runtime/src/bank/partitioned_epoch_rewards/calculation.rs#L536 */
+    https://github.com/anza-xyz/agave/blob/v2.2.14/runtime/src/bank/partitioned_epoch_rewards/calculation.rs#L521 */
 void
 fd_rewards_recalculate_partitioned_rewards( fd_exec_slot_ctx_t * slot_ctx,
                                             fd_tpool_t *         tpool,
                                             fd_spad_t * *        exec_spads,
                                             ulong                exec_spad_cnt,
                                             fd_spad_t *          runtime_spad ) {
-  fd_sysvar_epoch_rewards_t * epoch_rewards = fd_sysvar_cache_epoch_rewards( slot_ctx->sysvar_cache, slot_ctx->runtime_wksp );
+  fd_sysvar_epoch_rewards_t * epoch_rewards = fd_sysvar_epoch_rewards_read( slot_ctx->funk, slot_ctx->funk_txn, runtime_spad );
   if( FD_UNLIKELY( epoch_rewards == NULL ) ) {
-    FD_LOG_NOTICE(( "failed to read sysvar epoch rewards - the sysvar may not have been created yet" ));
+    FD_LOG_NOTICE(( "Failed to read or decode epoch rewards sysvar - may not have been created yet" ));
     set_epoch_reward_status_inactive( slot_ctx, runtime_spad );
     return;
   }
@@ -1207,18 +1211,19 @@ fd_rewards_recalculate_partitioned_rewards( fd_exec_slot_ctx_t * slot_ctx,
     int _err[1] = {0};
     ulong * new_warmup_cooldown_rate_epoch = fd_spad_alloc( runtime_spad, alignof(ulong), sizeof(ulong) );
     int is_some = fd_new_warmup_cooldown_rate_epoch( slot_ctx->slot_bank.slot,
-                                                     slot_ctx->sysvar_cache,
+                                                     slot_ctx->funk,
+                                                     slot_ctx->funk_txn,
+                                                     runtime_spad,
                                                      &slot_ctx->epoch_ctx->features,
-                                                     slot_ctx->runtime_wksp,
                                                      new_warmup_cooldown_rate_epoch,
                                                      _err );
     if( FD_UNLIKELY( !is_some ) ) {
       new_warmup_cooldown_rate_epoch = NULL;
     }
 
-    fd_stake_history_t const * stake_history = fd_sysvar_cache_stake_history( slot_ctx->sysvar_cache, slot_ctx->runtime_wksp );
+    fd_stake_history_t const * stake_history = fd_sysvar_stake_history_read( slot_ctx->funk, slot_ctx->funk_txn, runtime_spad );
     if( FD_UNLIKELY( !stake_history ) ) {
-      FD_LOG_ERR(( "StakeHistory sysvar is missing from sysvar cache" ));
+      FD_LOG_ERR(( "Unable to read and decode stake history sysvar" ));
     }
 
     fd_point_value_t point_value = { .points  = epoch_rewards->total_points,
@@ -1249,15 +1254,16 @@ fd_rewards_recalculate_partitioned_rewards( fd_exec_slot_ctx_t * slot_ctx,
                                exec_spads,
                                exec_spad_cnt,
                                runtime_spad );
-    fd_refresh_vote_accounts( slot_ctx,
-                              stake_history,
-                              new_warmup_cooldown_rate_epoch,
-                              &epoch_info,
-                              tpool,
-                              exec_spads,
-                              exec_spad_cnt,
-                              runtime_spad );
 
+    /* NOTE: this is just a workaround for now to correctly populate epoch_info. */
+    fd_populate_vote_accounts( slot_ctx,
+                               stake_history,
+                               new_warmup_cooldown_rate_epoch,
+                               &epoch_info,
+                               tpool,
+                               exec_spads,
+                               exec_spad_cnt,
+                               runtime_spad );
     /* In future, the calculation will be cached in the snapshot, but for now we just re-calculate it
         (as Agave does). */
     fd_calculate_stake_vote_rewards_result_t calculate_stake_vote_rewards_result[1];
@@ -1275,10 +1281,13 @@ fd_rewards_recalculate_partitioned_rewards( fd_exec_slot_ctx_t * slot_ctx,
     /* The vote reward map isn't actually used in this code path and will only
        be freed after rewards have been distributed. */
 
+
+    /* Use the epoch rewards sysvar parent_blockhash and num_partitions.
+       https://github.com/anza-xyz/agave/blob/v2.2.14/runtime/src/bank/partitioned_epoch_rewards/calculation.rs#L579 */
     fd_stake_reward_calculation_partitioned_t stake_rewards_by_partition[1];
-    hash_rewards_into_partitions( slot_ctx,
-                                  &calculate_stake_vote_rewards_result->stake_reward_calculation,
+    hash_rewards_into_partitions( &calculate_stake_vote_rewards_result->stake_reward_calculation,
                                   &epoch_rewards->parent_blockhash,
+                                  epoch_rewards->num_partitions,
                                   stake_rewards_by_partition,
                                   runtime_spad );
 

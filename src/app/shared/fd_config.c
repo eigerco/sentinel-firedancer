@@ -2,8 +2,8 @@
 #include "fd_config.h"
 #include "fd_config_private.h"
 
-#include "fd_net_util.h"
-#include "fd_sys_util.h"
+#include "../platform/fd_net_util.h"
+#include "../platform/fd_sys_util.h"
 #include "genesis_hash.h"
 #include "../../ballet/toml/fd_toml.h"
 #include "../../disco/genesis/fd_genesis_cluster.h"
@@ -355,6 +355,11 @@ fd_config_fill( fd_config_t * config,
     }
   }
 
+  if(      FD_LIKELY( !strcmp( config->tiles.pack.schedule_strategy, "perf"     ) ) ) config->tiles.pack.schedule_strategy_enum = 0;
+  else if( FD_LIKELY( !strcmp( config->tiles.pack.schedule_strategy, "balanced" ) ) ) config->tiles.pack.schedule_strategy_enum = 1;
+  else if( FD_LIKELY( !strcmp( config->tiles.pack.schedule_strategy, "revenue"  ) ) ) config->tiles.pack.schedule_strategy_enum = 2;
+  else FD_LOG_ERR(( "[tiles.pack.schedule_strategy] %s not recognized", config->tiles.pack.schedule_strategy ));
+
   fd_config_fill_net( config );
 
   if( FD_UNLIKELY( config->is_firedancer ) ) {
@@ -523,6 +528,11 @@ fd_config_validate( fd_config_t const * config ) {
 
   CFG_HAS_NON_ZERO( tiles.gui.gui_listen_port );
 
+  if( FD_UNLIKELY( config->tiles.bundle.keepalive_interval_millis <    3000 &&
+                   config->tiles.bundle.keepalive_interval_millis > 3600000 ) ) {
+    FD_LOG_ERR(( "`tiles.bundle.keepalive_interval_millis` must be in range [3000, 3,600,000]" ));
+  }
+
   CFG_HAS_NON_EMPTY( development.netns.interface0 );
   CFG_HAS_NON_EMPTY( development.netns.interface0_mac );
   CFG_HAS_NON_EMPTY( development.netns.interface0_addr );
@@ -538,6 +548,8 @@ fd_config_validate( fd_config_t const * config ) {
   CFG_HAS_NON_ZERO ( development.bench.benchg_tile_count );
   CFG_HAS_NON_ZERO ( development.bench.benchs_tile_count );
   CFG_HAS_NON_EMPTY( development.bench.affinity );
+
+  CFG_HAS_NON_ZERO( development.bundle.ssl_heap_size_mib );
 }
 
 #undef CFG_HAS_NON_EMPTY
