@@ -128,7 +128,8 @@ create_genesis( config_t const * config,
   fd_keyload_unload( identity_pubkey_, 1 );
 
   char file_path[ PATH_MAX ];
-  FD_TEST( fd_cstr_printf_check( file_path, PATH_MAX, NULL, "%s/faucet.json", config->paths.base ) );
+  // NOTE(Eiger): changed the location of the faucet.json. In the future we could add a config param.
+  FD_TEST( fd_cstr_printf_check( file_path, PATH_MAX, NULL, "%s/../faucet.json", config->paths.ledger ) );
   uchar const * faucet_pubkey_ = fd_keyload_load( file_path, 1 );
   if( FD_UNLIKELY( !faucet_pubkey_ ) ) FD_LOG_ERR(( "Failed to load faucet key" ));
   memcpy( options->faucet_pubkey.key, faucet_pubkey_, 32 );
