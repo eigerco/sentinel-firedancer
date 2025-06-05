@@ -60,6 +60,7 @@ fd_topo_initialize( config_t * config ) {
 
   #define FOR(cnt) for( ulong i=0UL; i<cnt; i++ )
 
+  // NOTE(Eiger): updated the params for testing purposes - to be able to run multiple nodes on 1 machine
   /*                                  topo, link_name,      wksp_name,      depth,                                    mtu,                    burst */
   FOR(quic_tile_cnt)   fd_topob_link( topo, "quic_net",     "net_quic",     config->net.ingress_buffer_size,          FD_NET_MTU,             1UL );
   FOR(shred_tile_cnt)  fd_topob_link( topo, "shred_net",    "net_shred",    32768UL / 64,                             FD_NET_MTU,             1UL );
