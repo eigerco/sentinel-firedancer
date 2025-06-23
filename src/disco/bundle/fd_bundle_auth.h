@@ -19,7 +19,7 @@ struct fd_bundle_auther {
   uchar pubkey[ 32 ];
 
   char   challenge[ 9 ];
-  char   access_token [ 512 ];
+  char   access_token[ 1024 ];
   ushort access_token_sz;
 };
 
@@ -47,10 +47,7 @@ fd_bundle_auther_init( fd_bundle_auther_t * auther );
 void
 fd_bundle_auther_poll( fd_bundle_auther_t *   auther,
                        fd_grpc_client_t *     client,
-                       fd_keyguard_client_t * keyguard,
-                       char const *           host,
-                       ulong                  host_len,
-                       ushort                 port );
+                       fd_keyguard_client_t * keyguard );
 
 /* fd_bundle_auther_reset restarts authentication.  Intended to be
    called when a request fails with an auth failure. */

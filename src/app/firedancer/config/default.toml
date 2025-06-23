@@ -293,6 +293,33 @@ user = ""
         snapshot_grace_period_seconds = 409
         max_vote_accounts = 2000000
 
+# This section configures the "funk" account database.  Currently, funk
+# stores all Solana accounts.  In future versions of Firedancer, most
+# accounts will be offloaded to the "groove" database.
+[funk]
+    # The max amount of records that the funk instance can store.
+    # Each Solana account uses at least one record.  Additional records
+    # are used for account changes that are not yet finalized by
+    # consensus (typically takes 13 seconds).
+    max_account_records = 10_000_000
+
+    # The size of the funk heap in gigabytes.  This value must be large
+    # enough to store all Solana accounts uncompressed.
+    heap_size_gib = 32
+
+    # The max amount of concurrent database transactions.  These are
+    # used to track conflicting versions of accounts until such
+    # conflicts are resolved by the consensus algorithm.  (Not to be
+    # confused with Solana transactions).
+    # The validator uses one database transaction for each Solana block
+    # that is not yet finalized.  It is not recommended to change this
+    # setting.
+    max_database_transactions = 1024
+
+# This section configures the "groove" persistent account database.
+# [groove]
+# ...
+
 # CPU cores in Firedancer are carefully managed.  Where a typical
 # program lets the operating system scheduler determine which threads to
 # run on which cores and for how long, Firedancer overrides most of this
@@ -880,6 +907,12 @@ user = ""
         # [3e3,3600e3]
         keepalive_interval_millis = 5000
 
+        # By default, the TLS certificate of the bundle server is
+        # verified against the CA certs in /etc/ssl/certs, if the URL
+        # specifies https.  To disable certificate verification, set
+        # this option to 'false'.
+        tls_cert_verify = true
+
     # The pack tile takes incoming transactions that have been verified
     # by the verify tile and then deduplicated, and attempts to order
     # them in an optimal way to generate the most fees per compute
@@ -1096,9 +1129,6 @@ user = ""
         # snapshots and frequent validator restarts are expected.
         snapshot_dir = ""
 
-        funk_sz_gb = 32
-        funk_rec_max = 10000000
-        funk_txn_max = 1024
         cluster_version =  "1.18.0"
 
     # The metric tile receives metrics updates published from the rest
@@ -1378,7 +1408,7 @@ user = ""
         # This affects the size of various gRPC-related buffers,
         # including socket buffer sizes, the TLS buffer, the HTTP/2
         # frame buffer, and a Protobuf encode buffer.
-        buffer_size_kib = 1024
+        buffer_size_kib = 2048
 
         # SSL library heap size in MiB.
         #

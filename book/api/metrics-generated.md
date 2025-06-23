@@ -108,7 +108,9 @@
 | <span class="metrics-name">quic_&#8203;connection_&#8203;error_&#8203;no_&#8203;slots</span> | counter | Number of connections that failed to create due to lack of slots. |
 | <span class="metrics-name">quic_&#8203;connection_&#8203;error_&#8203;retry_&#8203;fail</span> | counter | Number of connections that failed during retry (e.g. invalid token). |
 | <span class="metrics-name">quic_&#8203;pkt_&#8203;no_&#8203;conn</span> | counter | Number of packets with an unknown connection ID. |
-| <span class="metrics-name">quic_&#8203;pkt_&#8203;tx_&#8203;alloc_&#8203;fail</span> | counter | Number of packets failed to send because of metadata alloc fail. |
+| <span class="metrics-name">quic_&#8203;frame_&#8203;tx_&#8203;alloc</span><br/>{frame_&#8203;tx_&#8203;alloc_&#8203;result="<span class="metrics-enum">success</span>"} | counter | Results of attempts to acquire QUIC frame metadata. (Success) |
+| <span class="metrics-name">quic_&#8203;frame_&#8203;tx_&#8203;alloc</span><br/>{frame_&#8203;tx_&#8203;alloc_&#8203;result="<span class="metrics-enum">fail_&#8203;empty_&#8203;pool</span>"} | counter | Results of attempts to acquire QUIC frame metadata. (PktMetaPoolEmpty) |
+| <span class="metrics-name">quic_&#8203;frame_&#8203;tx_&#8203;alloc</span><br/>{frame_&#8203;tx_&#8203;alloc_&#8203;result="<span class="metrics-enum">fail_&#8203;conn_&#8203;max</span>"} | counter | Results of attempts to acquire QUIC frame metadata. (ConnMaxedInflightFrames) |
 | <span class="metrics-name">quic_&#8203;handshakes_&#8203;created</span> | counter | Number of handshake flows created. |
 | <span class="metrics-name">quic_&#8203;handshake_&#8203;error_&#8203;alloc_&#8203;fail</span> | counter | Number of handshakes dropped due to alloc fail. |
 | <span class="metrics-name">quic_&#8203;handshake_&#8203;evicted</span> | counter | Number of handshakes dropped due to eviction. |
@@ -181,6 +183,9 @@
 | <span class="metrics-name">bundle_&#8203;shredstream_&#8203;heartbeats</span> | counter | Number of ShredStream heartbeats successfully sent |
 | <span class="metrics-name">bundle_&#8203;keepalives</span> | counter | Number of HTTP/2 PINGs acknowledged by server |
 | <span class="metrics-name">bundle_&#8203;connected</span> | gauge | 1 if connected to the bundle server, 0 if not |
+| <span class="metrics-name">bundle_&#8203;rtt_&#8203;sample</span> | gauge | Latest RTT sample at scrape time (nanoseconds) |
+| <span class="metrics-name">bundle_&#8203;rtt_&#8203;smoothed</span> | gauge | RTT moving average (nanoseconds) |
+| <span class="metrics-name">bundle_&#8203;rtt_&#8203;var</span> | gauge | RTT variance (nanoseconds) |
 
 </div>
 
@@ -245,6 +250,7 @@
 | <span class="metrics-name">pack_&#8203;votes_&#8203;per_&#8203;microblock_&#8203;count</span> | histogram | Count of simple vote transactions in a scheduled microblock |
 | <span class="metrics-name">pack_&#8203;normal_&#8203;transaction_&#8203;received</span> | counter | Count of transactions received via the normal TPU path |
 | <span class="metrics-name">pack_&#8203;transaction_&#8203;inserted</span><br/>{pack_&#8203;txn_&#8203;insert_&#8203;return="<span class="metrics-enum">bundle_&#8203;blacklist</span>"} | counter | Result of inserting a transaction into the pack object (Transaction uses an account on the bundle blacklist) |
+| <span class="metrics-name">pack_&#8203;transaction_&#8203;inserted</span><br/>{pack_&#8203;txn_&#8203;insert_&#8203;return="<span class="metrics-enum">invalid_&#8203;nonce</span>"} | counter | Result of inserting a transaction into the pack object (Transaction is an invalid durable nonce transaction) |
 | <span class="metrics-name">pack_&#8203;transaction_&#8203;inserted</span><br/>{pack_&#8203;txn_&#8203;insert_&#8203;return="<span class="metrics-enum">write_&#8203;sysvar</span>"} | counter | Result of inserting a transaction into the pack object (Transaction tries to write to a sysvar) |
 | <span class="metrics-name">pack_&#8203;transaction_&#8203;inserted</span><br/>{pack_&#8203;txn_&#8203;insert_&#8203;return="<span class="metrics-enum">estimation_&#8203;fail</span>"} | counter | Result of inserting a transaction into the pack object (Estimating compute cost and/or fee failed) |
 | <span class="metrics-name">pack_&#8203;transaction_&#8203;inserted</span><br/>{pack_&#8203;txn_&#8203;insert_&#8203;return="<span class="metrics-enum">duplicate_&#8203;account</span>"} | counter | Result of inserting a transaction into the pack object (Transaction included an account address twice) |
@@ -254,11 +260,15 @@
 | <span class="metrics-name">pack_&#8203;transaction_&#8203;inserted</span><br/>{pack_&#8203;txn_&#8203;insert_&#8203;return="<span class="metrics-enum">addr_&#8203;lut</span>"} | counter | Result of inserting a transaction into the pack object (Transaction loaded accounts from a lookup table) |
 | <span class="metrics-name">pack_&#8203;transaction_&#8203;inserted</span><br/>{pack_&#8203;txn_&#8203;insert_&#8203;return="<span class="metrics-enum">unaffordable</span>"} | counter | Result of inserting a transaction into the pack object (Fee payer's balance below transaction fee) |
 | <span class="metrics-name">pack_&#8203;transaction_&#8203;inserted</span><br/>{pack_&#8203;txn_&#8203;insert_&#8203;return="<span class="metrics-enum">duplicate</span>"} | counter | Result of inserting a transaction into the pack object (Pack aware of transaction with same signature) |
+| <span class="metrics-name">pack_&#8203;transaction_&#8203;inserted</span><br/>{pack_&#8203;txn_&#8203;insert_&#8203;return="<span class="metrics-enum">nonce_&#8203;priority</span>"} | counter | Result of inserting a transaction into the pack object (Transaction's fee was too low given its compute unit requirement and another competing transactions that uses the same durable nonce) |
 | <span class="metrics-name">pack_&#8203;transaction_&#8203;inserted</span><br/>{pack_&#8203;txn_&#8203;insert_&#8203;return="<span class="metrics-enum">priority</span>"} | counter | Result of inserting a transaction into the pack object (Transaction's fee was too low given its compute unit requirement and other competing transactions) |
 | <span class="metrics-name">pack_&#8203;transaction_&#8203;inserted</span><br/>{pack_&#8203;txn_&#8203;insert_&#8203;return="<span class="metrics-enum">nonvote_&#8203;add</span>"} | counter | Result of inserting a transaction into the pack object (Transaction that was not a simple vote added to pending transactions) |
 | <span class="metrics-name">pack_&#8203;transaction_&#8203;inserted</span><br/>{pack_&#8203;txn_&#8203;insert_&#8203;return="<span class="metrics-enum">vote_&#8203;add</span>"} | counter | Result of inserting a transaction into the pack object (Simple vote transaction was added to pending transactions) |
 | <span class="metrics-name">pack_&#8203;transaction_&#8203;inserted</span><br/>{pack_&#8203;txn_&#8203;insert_&#8203;return="<span class="metrics-enum">nonvote_&#8203;replace</span>"} | counter | Result of inserting a transaction into the pack object (Transaction that was not a simple vote replaced a lower priority transaction) |
 | <span class="metrics-name">pack_&#8203;transaction_&#8203;inserted</span><br/>{pack_&#8203;txn_&#8203;insert_&#8203;return="<span class="metrics-enum">vote_&#8203;replace</span>"} | counter | Result of inserting a transaction into the pack object (Simple vote transaction replaced a lower priority transaction) |
+| <span class="metrics-name">pack_&#8203;transaction_&#8203;inserted</span><br/>{pack_&#8203;txn_&#8203;insert_&#8203;return="<span class="metrics-enum">nonce_&#8203;nonvote_&#8203;add</span>"} | counter | Result of inserting a transaction into the pack object (Durable nonce transaction added to pending transactions) |
+| <span class="metrics-name">pack_&#8203;transaction_&#8203;inserted</span><br/>{pack_&#8203;txn_&#8203;insert_&#8203;return="<span class="metrics-enum">unused</span>"} | counter | Result of inserting a transaction into the pack object (Unused because durable nonce transactions can't be simple votes) |
+| <span class="metrics-name">pack_&#8203;transaction_&#8203;inserted</span><br/>{pack_&#8203;txn_&#8203;insert_&#8203;return="<span class="metrics-enum">nonce_&#8203;nonvote_&#8203;replace</span>"} | counter | Result of inserting a transaction into the pack object (Durable nonce transaction replaced a lower priority transaction, likely one that uses the same durable nonce) |
 | <span class="metrics-name">pack_&#8203;metric_&#8203;timing</span><br/>{pack_&#8203;timing_&#8203;state="<span class="metrics-enum">no_&#8203;txn_&#8203;no_&#8203;bank_&#8203;no_&#8203;leader_&#8203;no_&#8203;microblock</span>"} | counter | Time in nanos spent in each state (Pack had no transactions available, and wasn't leader) |
 | <span class="metrics-name">pack_&#8203;metric_&#8203;timing</span><br/>{pack_&#8203;timing_&#8203;state="<span class="metrics-enum">txn_&#8203;no_&#8203;bank_&#8203;no_&#8203;leader_&#8203;no_&#8203;microblock</span>"} | counter | Time in nanos spent in each state (Pack had transactions available, but wasn't leader or had hit a limit) |
 | <span class="metrics-name">pack_&#8203;metric_&#8203;timing</span><br/>{pack_&#8203;timing_&#8203;state="<span class="metrics-enum">no_&#8203;txn_&#8203;bank_&#8203;no_&#8203;leader_&#8203;no_&#8203;microblock</span>"} | counter | Time in nanos spent in each state (Pack had no transactions available, had banks but wasn't leader) |
@@ -279,6 +289,7 @@
 | <span class="metrics-name">pack_&#8203;transaction_&#8203;inserted_&#8203;to_&#8203;extra</span> | counter | Transactions inserted into the extra transaction storage because pack's primary storage was full |
 | <span class="metrics-name">pack_&#8203;transaction_&#8203;inserted_&#8203;from_&#8203;extra</span> | counter | Transactions pulled from the extra transaction storage and inserted into pack's primary storage |
 | <span class="metrics-name">pack_&#8203;transaction_&#8203;expired</span> | counter | Transactions deleted from pack because their TTL expired |
+| <span class="metrics-name">pack_&#8203;transaction_&#8203;deleted</span> | counter | Transactions dropped from pack because they were requested to be deleted |
 | <span class="metrics-name">pack_&#8203;transaction_&#8203;dropped_&#8203;partial_&#8203;bundle</span> | counter | Transactions dropped from pack because they were part of a partial bundle |
 | <span class="metrics-name">pack_&#8203;available_&#8203;transactions</span><br/>{avail_&#8203;txn_&#8203;type="<span class="metrics-enum">all</span>"} | gauge | The total number of pending transactions in pack's pool that are available to be scheduled (All transactions in any treap) |
 | <span class="metrics-name">pack_&#8203;available_&#8203;transactions</span><br/>{avail_&#8203;txn_&#8203;type="<span class="metrics-enum">regular</span>"} | gauge | The total number of pending transactions in pack's pool that are available to be scheduled (Non-votes in the main treap) |
@@ -410,7 +421,8 @@
 | <span class="metrics-name">shred_&#8203;shred_&#8203;processed</span><br/>{shred_&#8203;processing_&#8203;result="<span class="metrics-enum">okay</span>"} | counter | The result of processing a thread from the network (Shred accepted to an incomplete FEC set) |
 | <span class="metrics-name">shred_&#8203;shred_&#8203;processed</span><br/>{shred_&#8203;processing_&#8203;result="<span class="metrics-enum">completes</span>"} | counter | The result of processing a thread from the network (Shred accepted and resulted in a valid, complete FEC set) |
 | <span class="metrics-name">shred_&#8203;fec_&#8203;set_&#8203;spilled</span> | counter | The number of FEC sets that were spilled because they didn't complete in time and we needed space |
-| <span class="metrics-name">shred_&#8203;shred_&#8203;rejected_&#8203;initial</span> | counter | The number shreds that were rejected before any resources were allocated for the FEC set |
+| <span class="metrics-name">shred_&#8203;shred_&#8203;rejected_&#8203;initial</span> | counter | The number of shreds that were rejected before any resources were allocated for the FEC set |
+| <span class="metrics-name">shred_&#8203;shred_&#8203;rejected_&#8203;unchained</span> | counter | The number of shreds that were rejected because they're not chained merkle shreds |
 | <span class="metrics-name">shred_&#8203;fec_&#8203;rejected_&#8203;fatal</span> | counter | The number of FEC sets that were rejected for reasons that cause the whole FEC set to become invalid |
 | <span class="metrics-name">shred_&#8203;force_&#8203;complete_&#8203;request</span> | counter | The number of times we recieved a FEC force complete message |
 | <span class="metrics-name">shred_&#8203;force_&#8203;complete_&#8203;failure</span> | counter | The number of times we failed to force complete a FEC set on request |
@@ -460,13 +472,13 @@
 | <span class="metrics-name">gossip_&#8203;mismatched_&#8203;contact_&#8203;info_&#8203;shred_&#8203;version</span> | counter | Mismatched Contact Info Shred Version |
 | <span class="metrics-name">gossip_&#8203;ipv6_&#8203;contact_&#8203;info</span><br/>{peer_&#8203;types="<span class="metrics-enum">tvu</span>"} | counter | IPv6 Contact Info (by peer type) (TVU) |
 | <span class="metrics-name">gossip_&#8203;ipv6_&#8203;contact_&#8203;info</span><br/>{peer_&#8203;types="<span class="metrics-enum">repair</span>"} | counter | IPv6 Contact Info (by peer type) (Repair) |
-| <span class="metrics-name">gossip_&#8203;ipv6_&#8203;contact_&#8203;info</span><br/>{peer_&#8203;types="<span class="metrics-enum">voter</span>"} | counter | IPv6 Contact Info (by peer type) (Voter) |
+| <span class="metrics-name">gossip_&#8203;ipv6_&#8203;contact_&#8203;info</span><br/>{peer_&#8203;types="<span class="metrics-enum">send</span>"} | counter | IPv6 Contact Info (by peer type) (Send) |
 | <span class="metrics-name">gossip_&#8203;zero_&#8203;ipv4_&#8203;contact_&#8203;info</span><br/>{peer_&#8203;types="<span class="metrics-enum">tvu</span>"} | counter | Zero IPv4 Contact Info (by peer type) (TVU) |
 | <span class="metrics-name">gossip_&#8203;zero_&#8203;ipv4_&#8203;contact_&#8203;info</span><br/>{peer_&#8203;types="<span class="metrics-enum">repair</span>"} | counter | Zero IPv4 Contact Info (by peer type) (Repair) |
-| <span class="metrics-name">gossip_&#8203;zero_&#8203;ipv4_&#8203;contact_&#8203;info</span><br/>{peer_&#8203;types="<span class="metrics-enum">voter</span>"} | counter | Zero IPv4 Contact Info (by peer type) (Voter) |
+| <span class="metrics-name">gossip_&#8203;zero_&#8203;ipv4_&#8203;contact_&#8203;info</span><br/>{peer_&#8203;types="<span class="metrics-enum">send</span>"} | counter | Zero IPv4 Contact Info (by peer type) (Send) |
 | <span class="metrics-name">gossip_&#8203;peer_&#8203;counts</span><br/>{peer_&#8203;types="<span class="metrics-enum">tvu</span>"} | gauge | Number of peers of each type (TVU) |
 | <span class="metrics-name">gossip_&#8203;peer_&#8203;counts</span><br/>{peer_&#8203;types="<span class="metrics-enum">repair</span>"} | gauge | Number of peers of each type (Repair) |
-| <span class="metrics-name">gossip_&#8203;peer_&#8203;counts</span><br/>{peer_&#8203;types="<span class="metrics-enum">voter</span>"} | gauge | Number of peers of each type (Voter) |
+| <span class="metrics-name">gossip_&#8203;peer_&#8203;counts</span><br/>{peer_&#8203;types="<span class="metrics-enum">send</span>"} | gauge | Number of peers of each type (Send) |
 | <span class="metrics-name">gossip_&#8203;shred_&#8203;version_&#8203;zero</span> | counter | Shred version zero |
 | <span class="metrics-name">gossip_&#8203;value_&#8203;meta_&#8203;size</span> | gauge | Current size of the CRDS value metas map |
 | <span class="metrics-name">gossip_&#8203;value_&#8203;vec_&#8203;size</span> | gauge | Current size of the CRDS value vector |
@@ -690,5 +702,19 @@
 | <span class="metrics-name">repair_&#8203;sent_&#8203;pkt_&#8203;types</span><br/>{repair_&#8203;sent_&#8203;request_&#8203;types="<span class="metrics-enum">needed_&#8203;window</span>"} | counter | What types of client messages are we sending (Need Window) |
 | <span class="metrics-name">repair_&#8203;sent_&#8203;pkt_&#8203;types</span><br/>{repair_&#8203;sent_&#8203;request_&#8203;types="<span class="metrics-enum">needed_&#8203;highest_&#8203;window</span>"} | counter | What types of client messages are we sending (Need Highest Window) |
 | <span class="metrics-name">repair_&#8203;sent_&#8203;pkt_&#8203;types</span><br/>{repair_&#8203;sent_&#8203;request_&#8203;types="<span class="metrics-enum">needed_&#8203;orphan</span>"} | counter | What types of client messages are we sending (Need Orphans) |
+
+</div>
+
+## Send Tile
+
+<div class="metrics">
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| <span class="metrics-name">send_&#8203;txns_&#8203;sent_&#8203;to_&#8203;leader</span> | counter | Total count of transactions sent to leader |
+| <span class="metrics-name">send_&#8203;leader_&#8203;sched_&#8203;not_&#8203;found</span> | counter | Total count of times leader schedule not found |
+| <span class="metrics-name">send_&#8203;leader_&#8203;not_&#8203;found</span> | counter | Total count of times leader not found for given slot |
+| <span class="metrics-name">send_&#8203;leader_&#8203;contact_&#8203;not_&#8203;found</span> | counter | Total count of times leader contact info not found |
+| <span class="metrics-name">send_&#8203;leader_&#8203;contact_&#8203;nonroutable</span> | counter | Total count of times leader contact is nonroutable |
 
 </div>

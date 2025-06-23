@@ -37,7 +37,6 @@
 #include "program/fd_address_lookup_table_program.h"
 
 #include "sysvar/fd_sysvar_clock.h"
-#include "sysvar/fd_sysvar_fees.h"
 #include "sysvar/fd_sysvar_last_restart_slot.h"
 #include "sysvar/fd_sysvar_recent_hashes.h"
 #include "sysvar/fd_sysvar_rent.h"
@@ -189,7 +188,7 @@ fd_runtime_update_leaders( fd_exec_slot_ctx_t * slot_ctx,
     if( FD_UNLIKELY( stake_weight_cnt>MAX_PUB_CNT ) ) {
       FD_LOG_ERR(( "Stake weight count exceeded max" ));
     }
-    if( FD_UNLIKELY( slot_cnt>MAX_SLOTS_CNT ) ) {
+    if( FD_UNLIKELY( slot_cnt>MAX_SLOTS_PER_EPOCH ) ) {
       FD_LOG_ERR(( "Slot count exceeeded max" ));
     }
 
@@ -444,9 +443,6 @@ fd_runtime_freeze( fd_exec_slot_ctx_t * slot_ctx, fd_spad_t * runtime_spad ) {
   fd_runtime_update_rent_epoch( slot_ctx );
 
   fd_sysvar_recent_hashes_update( slot_ctx, runtime_spad );
-
-  if( !FD_FEATURE_ACTIVE( slot_ctx->slot_bank.slot, slot_ctx->epoch_ctx->features, disable_fees_sysvar) )
-    fd_sysvar_fees_update( slot_ctx, runtime_spad );
 
   ulong fees = 0UL;
   ulong burn = 0UL;
@@ -950,16 +946,76 @@ fd_runtime_finalize_txns_update_blockstore_meta( fd_exec_slot_ctx_t *         sl
 /* Block-Level Execution Preparation/Finalization                             */
 /******************************************************************************/
 
+/*
+https://github.com/firedancer-io/solana/blob/dab3da8e7b667d7527565bddbdbecf7ec1fb868e/sdk/program/src/fee_calculator.rs#L105-L165
+*/
+static fd_fee_rate_governor_t
+fd_runtime_new_fee_rate_governor_derived( fd_exec_slot_ctx_t *   slot_ctx,
+                                          fd_fee_rate_governor_t base_fee_rate_governor,
+                                          ulong                  latest_singatures_per_slot ) {
+  fd_fee_rate_governor_t result = {
+    .target_signatures_per_slot    = base_fee_rate_governor.target_signatures_per_slot,
+    .target_lamports_per_signature = base_fee_rate_governor.target_lamports_per_signature,
+    .max_lamports_per_signature    = base_fee_rate_governor.max_lamports_per_signature,
+    .min_lamports_per_signature    = base_fee_rate_governor.min_lamports_per_signature,
+    .burn_percent                  = base_fee_rate_governor.burn_percent
+  };
+
+  ulong lamports_per_signature = 0;
+  if ( result.target_signatures_per_slot > 0 ) {
+    result.min_lamports_per_signature = fd_ulong_max( 1UL, (ulong)(result.target_lamports_per_signature / 2) );
+    result.max_lamports_per_signature = result.target_lamports_per_signature * 10;
+    ulong desired_lamports_per_signature = fd_ulong_min(
+      result.max_lamports_per_signature,
+      fd_ulong_max(
+        result.min_lamports_per_signature,
+        result.target_lamports_per_signature
+        * fd_ulong_min(latest_singatures_per_slot, (ulong)UINT_MAX)
+        / result.target_signatures_per_slot
+      )
+    );
+    long gap = (long)desired_lamports_per_signature - (long)slot_ctx->slot_bank.lamports_per_signature;
+    if ( gap == 0 ) {
+      lamports_per_signature = desired_lamports_per_signature;
+    } else {
+      long gap_adjust = (long)(fd_ulong_max( 1UL, (ulong)(result.target_lamports_per_signature / 20) ))
+        * (gap != 0)
+        * (gap > 0 ? 1 : -1);
+      lamports_per_signature = fd_ulong_min(
+        result.max_lamports_per_signature,
+        fd_ulong_max(
+          result.min_lamports_per_signature,
+          (ulong)((long) slot_ctx->slot_bank.lamports_per_signature + gap_adjust)
+        )
+      );
+    }
+  } else {
+    lamports_per_signature = base_fee_rate_governor.target_lamports_per_signature;
+    result.min_lamports_per_signature = result.target_lamports_per_signature;
+    result.max_lamports_per_signature = result.target_lamports_per_signature;
+  }
+
+  if( FD_UNLIKELY( slot_ctx->slot_bank.lamports_per_signature==0UL ) ) {
+    slot_ctx->prev_lamports_per_signature = lamports_per_signature;
+  } else {
+    slot_ctx->prev_lamports_per_signature = slot_ctx->slot_bank.lamports_per_signature;
+  }
+
+  slot_ctx->slot_bank.lamports_per_signature = lamports_per_signature;
+
+  return result;
+}
+
 static int
 fd_runtime_block_sysvar_update_pre_execute( fd_exec_slot_ctx_t * slot_ctx,
                                             fd_spad_t *          runtime_spad ) {
-  // let (fee_rate_governor, fee_components_time_us) = measure_us!(
-  //     FeeRateGovernor::new_derived(&parent.fee_rate_governor, parent.signature_count())
-  // );
-  /* https://github.com/firedancer-io/solana/blob/dab3da8e7b667d7527565bddbdbecf7ec1fb868e/runtime/src/bank.rs#L1312-L1314 */
-  fd_sysvar_fees_new_derived( slot_ctx,
-                              slot_ctx->slot_bank.fee_rate_governor,
-                              slot_ctx->slot_bank.parent_signature_cnt );
+
+  /* Initialize the fee rate governor */
+  fd_fee_rate_governor_t fee_rate_governor = fd_runtime_new_fee_rate_governor_derived(
+      slot_ctx,
+      slot_ctx->slot_bank.fee_rate_governor,
+      slot_ctx->slot_bank.parent_signature_cnt );
+  slot_ctx->slot_bank.fee_rate_governor = fee_rate_governor;
 
   // TODO: move all these out to a fd_sysvar_update() call...
   long clock_update_time      = -fd_log_wallclock();
@@ -967,9 +1023,7 @@ fd_runtime_block_sysvar_update_pre_execute( fd_exec_slot_ctx_t * slot_ctx,
   clock_update_time          += fd_log_wallclock();
   double clock_update_time_ms = (double)clock_update_time * 1e-6;
   FD_LOG_INFO(( "clock updated - slot: %lu, elapsed: %6.6f ms", slot_ctx->slot_bank.slot, clock_update_time_ms ));
-  if( !FD_FEATURE_ACTIVE( slot_ctx->slot_bank.slot, slot_ctx->epoch_ctx->features, disable_fees_sysvar ) ) {
-    fd_sysvar_fees_update( slot_ctx, runtime_spad );
-  }
+
   // It has to go into the current txn previous info but is not in slot 0
   if( slot_ctx->slot_bank.slot != 0 ) {
     fd_sysvar_slot_hashes_update( slot_ctx, runtime_spad );
@@ -2165,7 +2219,7 @@ fd_update_stake_delegations( fd_exec_slot_ctx_t * slot_ctx,
                              fd_epoch_info_t *    temp_info ) {
   fd_epoch_bank_t * epoch_bank = fd_exec_epoch_ctx_epoch_bank( slot_ctx->epoch_ctx );
   fd_slot_bank_t *  slot_bank  = &slot_ctx->slot_bank;
-  fd_stakes_t *     stakes     = &epoch_bank->stakes;
+  fd_stakes_delegation_t *     stakes     = &epoch_bank->stakes;
 
   /* In one pass, iterate over all the new stake infos and insert the updated values into the epoch stakes cache
       This assumes that there is enough memory pre-allocated for the stakes cache. */
@@ -2837,27 +2891,14 @@ fd_runtime_process_new_epoch( fd_exec_slot_ctx_t * slot_ctx,
 
   /* Distribute rewards */
   fd_hash_t const * parent_blockhash = slot_ctx->slot_bank.block_hash_queue.last_hash;
-  if( FD_FEATURE_ACTIVE( slot_ctx->slot_bank.slot, slot_ctx->epoch_ctx->features, enable_partitioned_epoch_reward ) ||
-      FD_FEATURE_ACTIVE( slot_ctx->slot_bank.slot, slot_ctx->epoch_ctx->features, partitioned_epoch_rewards_superfeature ) ) {
-    FD_LOG_NOTICE(( "fd_begin_partitioned_rewards" ));
-    fd_begin_partitioned_rewards( slot_ctx,
-                                  parent_blockhash,
-                                  parent_epoch,
-                                  &temp_info,
-                                  tpool,
-                                  exec_spads,
-                                  exec_spad_cnt,
-                                  runtime_spad );
-  } else {
-    fd_update_rewards( slot_ctx,
-                       parent_blockhash,
-                       parent_epoch,
-                       &temp_info,
-                       tpool,
-                       exec_spads,
-                       exec_spad_cnt,
-                       runtime_spad );
-  }
+  fd_begin_partitioned_rewards( slot_ctx,
+                                parent_blockhash,
+                                parent_epoch,
+                                &temp_info,
+                                tpool,
+                                exec_spads,
+                                exec_spad_cnt,
+                                runtime_spad );
 
   /* Replace stakes at T-2 (slot_ctx->slot_bank.epoch_stakes) by stakes at T-1 (epoch_bank->next_epoch_stakes) */
   fd_update_epoch_stakes( slot_ctx );
@@ -3304,9 +3345,6 @@ fd_runtime_init_program( fd_exec_slot_ctx_t * slot_ctx,
   fd_sysvar_slot_history_init( slot_ctx, runtime_spad );
   fd_sysvar_slot_hashes_init( slot_ctx, runtime_spad );
   fd_sysvar_epoch_schedule_init( slot_ctx );
-  if( !FD_FEATURE_ACTIVE( slot_ctx->slot_bank.slot, slot_ctx->epoch_ctx->features, disable_fees_sysvar ) ) {
-    fd_sysvar_fees_init( slot_ctx );
-  }
   fd_sysvar_rent_init( slot_ctx );
   fd_sysvar_stake_history_init( slot_ctx );
   fd_sysvar_last_restart_slot_init( slot_ctx );
@@ -3543,7 +3581,7 @@ fd_runtime_init_bank_from_genesis( fd_exec_slot_ctx_t *        slot_ctx,
   };
 
   /* Initializes the stakes cache in the Bank structure. */
-  epoch_bank->stakes = (fd_stakes_t){
+  epoch_bank->stakes = (fd_stakes_delegation_t){
       .stake_delegations_pool = sacc_pool,
       .stake_delegations_root = sacc_root,
       .epoch                  = 0UL,
@@ -4141,9 +4179,7 @@ fd_runtime_block_pre_execute_process_new_epoch( fd_exec_slot_ctx_t * slot_ctx,
     *is_epoch_boundary = 0;
   }
 
-  if( slot_ctx->slot_bank.slot != 0UL && (
-      FD_FEATURE_ACTIVE( slot_ctx->slot_bank.slot, slot_ctx->epoch_ctx->features, enable_partitioned_epoch_reward ) ||
-      FD_FEATURE_ACTIVE( slot_ctx->slot_bank.slot, slot_ctx->epoch_ctx->features, partitioned_epoch_rewards_superfeature ) ) ) {
+  if( FD_LIKELY( slot_ctx->slot_bank.slot!=0UL ) ) {
     fd_distribute_partitioned_epoch_rewards( slot_ctx,
                                              tpool,
                                              exec_spads,

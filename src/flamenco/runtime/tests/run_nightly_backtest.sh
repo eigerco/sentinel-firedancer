@@ -1,6 +1,5 @@
 #!/bin/bash -f
 
-
 send_slack_message() {
     MESSAGE=$1
     json_payload=$(cat <<EOF
@@ -96,14 +95,14 @@ echo "
         archiver_path = \"dump/$LEDGER/rocksdb\"
     [tiles.replay]
         snapshot = \"$SNAPSHOT\"
-        funk_sz_gb = $FUNK_PAGES
-        funk_txn_max = 1024
-        funk_rec_max = $INDEX_MAX
         cluster_version = \"$CLUSTER_VERSION\"
         enable_features = [ \"$ONE_OFFS\" ]
-        funk_file = \"dump/$LEDGER/backtest.funk\"
     [tiles.gui]
         enabled = false
+[funk]
+    heap_size_gib = $FUNK_PAGES
+    max_account_records = $INDEX_MAX
+    max_database_transactions = 1024
 [runtime]
     heap_size_gib = 200
 [blockstore]

@@ -1594,7 +1594,12 @@ class MapMember(TypeNode):
         print(f'    {nodename} * node = {mapname}_acquire( self->{self.name}_pool );', file=body)
         print(f'    {namespace}_{self.element}_new( &node->elem );', file=body)
         print(f'    {namespace}_{self.element}_decode_inner( &node->elem, alloc_mem, ctx );', file=body)
-        print(f'    {mapname}_insert( self->{self.name}_pool, &self->{self.name}_root, node );', file=body)
+        print(f'    {nodename} * out = NULL;;', file=body)
+        print(f'    {mapname}_insert_or_replace( self->{self.name}_pool, &self->{self.name}_root, node, &out );', file=body)
+        print(f'    if( out != NULL ) {{', file=body)
+        print(f'      // Unclear how to release the memory...', file=body)
+        print(f'      {mapname}_release( self->{self.name}_pool, out );', file=body)
+        print(f'    }}', file=body)
         print('  }', file=body)
 
     def emitDecodeInnerGlobal(self):
@@ -3014,6 +3019,8 @@ class StructType(TypeNode):
         self.comment = (json["comment"] if "comment" in json else None)
         self.nomethods = ("attribute" in json)
         self.encoders = (json["encoders"] if "encoders" in json else None)
+        self.normalizer = (json["normalizer"] if "normalizer" in json else None)
+        self.validator = (json["validator"] if "validator" in json else None)
         if "alignment" in json:
             self.attribute = f'__attribute__((aligned({json["alignment"]}UL))) '
             self.alignment = json["alignment"]
@@ -3171,6 +3178,10 @@ class StructType(TypeNode):
                 print(f'static inline int {n}_decode_footprint_inner( fd_bincode_decode_ctx_t * ctx, ulong * total_sz ) {{', file=body)
                 sz = self.fixedSize()
                 print(f'  if( (ulong)ctx->data + {self.fixedSize()}UL > (ulong)ctx->dataend ) {{ return FD_BINCODE_ERR_OVERFLOW; }};', file=body)
+                if self.validator is not None:
+                    print(f'  int err = {self.validator}( ctx );', file=body)
+                    print(f'  if( FD_UNLIKELY( err != FD_BINCODE_SUCCESS ) )', file=body)
+                    print(f'    return err;', file=body)
                 print(f'  ctx->data = (void *)( (ulong)ctx->data + {self.fixedSize()}UL );', file=body)
                 print(f'  return 0;', file=body)
                 print(f'}}', file=body)
@@ -3178,6 +3189,8 @@ class StructType(TypeNode):
                 print(f'static int {n}_decode_footprint_inner( fd_bincode_decode_ctx_t * ctx, ulong * total_sz ) {{', file=body)
                 print(f'  if( ctx->data>=ctx->dataend ) {{ return FD_BINCODE_ERR_OVERFLOW; }};', file=body)
                 print(f'  int err = 0;', file=body)
+                if self.validator is not None:
+                    print(f'  err = {self.validator}( ctx );', file=body)
                 for f in self.fields:
                     if hasattr(f, "ignore_underflow") and f.ignore_underflow:
                         print('  if( ctx->data == ctx->dataend ) return FD_BINCODE_SUCCESS;', file=body)
@@ -3200,6 +3213,8 @@ class StructType(TypeNode):
                 if hasattr(f, "ignore_underflow") and f.ignore_underflow:
                     print('  if( ctx->data == ctx->dataend ) return;', file=body)
                 f.emitDecodeInner()
+            if self.normalizer is not None:
+                print(f'  {self.normalizer}( self );', file=body)
             print(f'}}', file=body)
 
             print(f'void * {n}_decode( void * mem, fd_bincode_decode_ctx_t * ctx ) {{', file=body)

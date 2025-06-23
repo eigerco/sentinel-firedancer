@@ -78,6 +78,19 @@ typedef struct {
   uint permit_no_producers : 1;  /* Permit a topology where this link has no producers */
 } fd_topo_link_t;
 
+struct fd_topo_net_tile {
+  ulong umem_dcache_obj_id;  /* dcache for XDP UMEM frames */
+  uint  bind_address;
+
+  ushort shred_listen_port;
+  ushort quic_transaction_listen_port;
+  ushort legacy_transaction_listen_port;
+  ushort gossip_listen_port;
+  ushort repair_intake_listen_port;
+  ushort repair_serve_listen_port;
+};
+typedef struct fd_topo_net_tile fd_topo_net_tile_t;
+
 /* A tile is a unique process that is spawned by Firedancer to represent
    one thread of execution.  Firedancer sandboxes all tiles to their own
    process for security reasons.
@@ -89,7 +102,7 @@ typedef struct {
    All input links will be automatically polled by the tile
    infrastructure, and output links will automatically source and manage
    credits from consumers. */
-typedef struct {
+struct fd_topo_tile {
   ulong id;                     /* The ID of this tile.  Indexed from [0, tile_cnt).  When placed in a topology, the ID must be the index of the tile in the tiles list. */
   char  name[ 7UL ];            /* The name of this tile.  There can be multiple of each tile name in a topology. */
   ulong kind_id;                /* The ID of this tile within its name.  If there are n tile of a particular name, they have IDs [0, N).  The pair (name, kind_id) uniquely identifies a tile, as does "id" on its own. */
@@ -130,10 +143,11 @@ typedef struct {
   /* Configuration fields.  These are required to be known by the topology so it can determine the
      total size of Firedancer in memory. */
   union {
+    fd_topo_net_tile_t net;
+
     struct {
-      char   provider[ 8 ]; /* "xdp" or "socket" */
-      char   interface[ 16 ];
-      uint   bind_address;
+      fd_topo_net_tile_t net;
+      char interface[ 16 ];
 
       /* xdp specific options */
       ulong  xdp_rx_queue_size;
@@ -143,24 +157,19 @@ typedef struct {
       char   xdp_mode[8];
       int    zero_copy;
 
-      /* sock specific options */
-      int so_sndbuf;
-      int so_rcvbuf;
-
-      ushort shred_listen_port;
-      ushort quic_transaction_listen_port;
-      ushort legacy_transaction_listen_port;
-      ushort gossip_listen_port;
-      ushort repair_intake_listen_port;
-      ushort repair_serve_listen_port;
-
-      ulong umem_dcache_obj_id;    /* dcache for XDP UMEM frames */
       ulong netdev_dbl_buf_obj_id; /* dbl_buf containing netdev_tbl */
       ulong fib4_main_obj_id;      /* fib4 containing main route table */
       ulong fib4_local_obj_id;     /* fib4 containing local route table */
       ulong neigh4_obj_id;         /* neigh4 hash map header */
       ulong neigh4_ele_obj_id;     /* neigh4 hash map slots */
-    } net;
+    } xdp;
+
+    struct {
+      fd_topo_net_tile_t net;
+      /* sock specific options */
+      int so_sndbuf;
+      int so_rcvbuf;
+    } sock;
 
     struct {
       ulong netdev_dbl_buf_obj_id; /* dbl_buf containing netdev_tbl */
@@ -200,6 +209,7 @@ typedef struct {
       ulong buf_sz;
       ulong ssl_heap_sz;
       ulong keepalive_interval_nanos;
+      uchar tls_cert_verify : 1;
     } bundle;
 
     struct {
@@ -267,6 +277,7 @@ typedef struct {
       ulong  max_websocket_connections;
       ulong  max_http_request_length;
       ulong  send_buffer_size_mb;
+      int    schedule_strategy;
     } gui;
 
     struct {
@@ -279,15 +290,13 @@ typedef struct {
       ulong max_vote_accounts;
 
       int   tx_metadata_storage;
+      ulong funk_obj_id;
       char  capture[ PATH_MAX ];
       char  funk_checkpt[ PATH_MAX ];
-      uint  funk_rec_max;
-      ulong funk_sz_gb;
-      ulong funk_txn_max;
-      char  funk_file[ PATH_MAX ];
       char  genesis[ PATH_MAX ];
       char  incremental[ PATH_MAX ];
       char  slots_replayed[ PATH_MAX ];
+      char  shred_cap[ PATH_MAX ];
       char  snapshot[ PATH_MAX ];
       char  snapshot_dir[ PATH_MAX ];
       char  status_cache[ PATH_MAX ];
@@ -297,11 +306,7 @@ typedef struct {
 
       char  identity_key_path[ PATH_MAX ];
       uint  ip_addr;
-      int   vote;
       char  vote_account_path[ PATH_MAX ];
-      ulong bank_tile_count;
-      ulong exec_tile_count;
-      ulong writer_tile_cuont;
       ulong full_interval;
       ulong incremental_interval;
 
@@ -315,12 +320,14 @@ typedef struct {
 
       ulong enable_features_cnt;
       char  enable_features[ 16 ][ FD_BASE58_ENCODED_32_SZ ];
+
+      ulong enable_bank_hash_cmp;
     } replay;
 
     struct {
       int   in_wen_restart;
       int   tower_checkpt_fileno;
-      char  funk_file[ PATH_MAX ];
+      ulong funk_obj_id;
       char  tower_checkpt[ PATH_MAX ];
       char  identity_key_path[ PATH_MAX ];
       char  genesis_hash[ FD_BASE58_ENCODED_32_SZ ];
@@ -329,11 +336,11 @@ typedef struct {
     } restart;
 
     struct {
-      char funk_file[ PATH_MAX ];
+      ulong funk_obj_id;
     } exec;
 
     struct {
-      char funk_file[ PATH_MAX ];
+      ulong funk_obj_id;
     } writer;
 
     struct {
@@ -380,7 +387,6 @@ typedef struct {
       int     good_peer_cache_file_fd;
       char    identity_key_path[ PATH_MAX ];
       ulong   max_pending_shred_sets;
-      uint    shred_tile_cnt;
     } repair;
 
     struct {
@@ -406,13 +412,10 @@ typedef struct {
 
       uint    ip_addr;
       char  identity_key_path[ PATH_MAX ];
-    } sender;
+    } send;
 
     struct {
-      char  identity_key_path[ PATH_MAX ];
-    } eqvoc;
-
-    struct {
+      ulong   funk_obj_id;
       ushort  rpc_port;
       ushort  tpu_port;
       uint    tpu_ip_addr;
@@ -424,6 +427,7 @@ typedef struct {
     } rpcserv;
 
     struct {
+      ulong funk_obj_id;
       ulong full_interval;
       ulong incremental_interval;
       char  out_dir[ PATH_MAX ];
@@ -438,7 +442,6 @@ typedef struct {
     } pktgen;
 
     struct {
-      int   enabled;
       ulong end_slot;
       char  archiver_path[ PATH_MAX ];
 
@@ -446,8 +449,15 @@ typedef struct {
       int archive_fd;
     } archiver;
 
+    struct {
+      ulong funk_obj_id;
+      char  identity_key_path[ PATH_MAX ];
+      char  vote_acc_path[ PATH_MAX ];
+    } tower;
   };
-} fd_topo_tile_t;
+};
+
+typedef struct fd_topo_tile fd_topo_tile_t;
 
 typedef struct {
   ulong id;
@@ -526,10 +536,13 @@ fd_topo_workspace_align( void ) {
   return 4096UL;
 }
 
-FD_FN_PURE static inline void *
+static inline void *
 fd_topo_obj_laddr( fd_topo_t const * topo,
                    ulong             obj_id ) {
   fd_topo_obj_t const * obj = &topo->objs[ obj_id ];
+  FD_TEST( obj_id<FD_TOPO_MAX_OBJS );
+  FD_TEST( obj->id == obj_id );
+  FD_TEST( obj->offset );
   return (void *)((ulong)topo->workspaces[ obj->wksp_id ].wksp + obj->offset);
 }
 
@@ -654,6 +667,42 @@ fd_topo_link_reliable_consumer_cnt( fd_topo_t const *      topo,
   }
 
   return cnt;
+}
+
+FD_FN_PURE static inline ulong
+fd_topo_tile_consumer_cnt( fd_topo_t const *      topo,
+                           fd_topo_tile_t const * tile ) {
+  (void)topo;
+  return tile->out_cnt;
+}
+
+FD_FN_PURE static inline ulong
+fd_topo_tile_reliable_consumer_cnt( fd_topo_t const *      topo,
+                                    fd_topo_tile_t const * tile ) {
+  ulong reliable_cons_cnt = 0UL;
+  for( ulong i=0UL; i<topo->tile_cnt; i++ ) {
+    fd_topo_tile_t const * consumer_tile = &topo->tiles[ i ];
+    for( ulong j=0UL; j<consumer_tile->in_cnt; j++ ) {
+      for( ulong k=0UL; k<tile->out_cnt; k++ ) {
+        if( FD_UNLIKELY( consumer_tile->in_link_id[ j ]==tile->out_link_id[ k ] && consumer_tile->in_link_reliable[ j ] ) ) {
+          reliable_cons_cnt++;
+        }
+      }
+    }
+  }
+  return reliable_cons_cnt;
+}
+
+FD_FN_PURE static inline ulong
+fd_topo_tile_producer_cnt( fd_topo_t const *     topo,
+                           fd_topo_tile_t const * tile ) {
+  (void)topo;
+  ulong in_cnt = 0UL;
+  for( ulong i=0UL; i<tile->in_cnt; i++ ) {
+    if( FD_UNLIKELY( !tile->in_link_poll[ i ] ) ) continue;
+    in_cnt++;
+  }
+  return in_cnt;
 }
 
 /* Join (map into the process) all shared memory (huge/gigantic pages)
